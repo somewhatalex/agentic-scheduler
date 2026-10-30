@@ -18,13 +18,13 @@ matters under `/mydata`:
 
 ### 1. Create the profile (once)
 
-1. Copy the dataset's URN from its info page (Storage > My Datasets > the dataset)
-   into the `dataset_urn` default in `cloudlab/profile.py`. You can also override it
-   when you instantiate.
-2. In the CloudLab portal, go to **Experiments > Create Experiment Profile**, pick
-   project Michigan-BigData, and paste or upload `cloudlab/profile.py` as the source.
-   - The portal can also create a profile from a git repository, but it looks for
-     `profile.py` at the repo root, so the paste option is simpler here.
+The dataset URN is already the default in `profile.py`. It can also be overridden
+when you instantiate.
+
+In the CloudLab portal, go to **Experiments > Create Experiment Profile**, pick
+project Michigan-BigData, and choose the git repository option with
+`https://github.com/somewhatalex/agentic-scheduler`. The portal reads `profile.py`
+from the repo root (it must stay there) and picks up later pushes to the repo.
 
 ### 2. Start an experiment
 
