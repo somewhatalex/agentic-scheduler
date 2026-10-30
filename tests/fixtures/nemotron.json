@@ -1,0 +1,64 @@
+{
+  "tool_calling": [
+    {
+      "messages": [
+        {"role": "system", "content": "Help with arithmetic."},
+        {"role": "user", "content": "What are two plus two and three plus three?"},
+        {"role": "assistant", "content": "", "reasoning_content": "Calculate both.", "tool_calls": [
+          {"id": "a", "type": "function", "function": {"name": "add", "arguments": "{\"a\":2,\"b\":2}"}},
+          {"id": "b", "type": "function", "function": {"name": "add", "arguments": "{\"a\":3,\"b\":3}"}}
+        ]},
+        {"role": "tool", "tool_call_id": "b", "content": "6"},
+        {"role": "tool", "tool_call_id": "a", "content": "4"},
+        {"role": "assistant", "content": "Four and six.", "reasoning_content": "Report the results."}
+      ],
+      "tools": [{"type": "function", "function": {"name": "add", "parameters": {"type": "object"}}}],
+      "metadata": {
+        "uuid": "demo-parallel", "source": "synthetic-demo",
+        "turn_token_count": [
+          {"reasoning": 0, "content": 5}, {"reasoning": 0, "content": 12},
+          {"reasoning": 3, "content": 0}, {"reasoning": 0, "content": 1},
+          {"reasoning": 0, "content": 1}, {"reasoning": 4, "content": 4}
+        ]
+      }
+    },
+    {
+      "messages": [
+        {"role": "user", "content": "Look up an unfinished request."},
+        {"role": "assistant", "content": "", "tool_calls": [
+          {"id": "unfinished", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+        ]}
+      ],
+      "metadata": {"uuid": "demo-incomplete", "source": "synthetic-demo"}
+    }
+  ],
+  "interactive_agent": [
+    {
+      "domain": "demo customer service",
+      "messages": [
+        {"role": "system", "content": "Answer customer questions."},
+        {"role": "user", "content": "When does the shop open?"},
+        {"role": "assistant", "content": "At nine."},
+        {"role": "user", "content": "And when does it close?"},
+        {"role": "assistant", "content": "At five."}
+      ],
+      "metadata": {
+        "uuid": "demo-multi-user",
+        "turn_token_count": [
+          {"reasoning": 0, "content": 6}, {"reasoning": 0, "content": 7},
+          {"reasoning": 0, "content": 3}, {"reasoning": 0, "content": 7},
+          {"reasoning": 0, "content": 3}
+        ]
+      }
+    }
+  ],
+  "search": [
+    {
+      "messages": [
+        {"role": "user", "content": "What is the capital of Michigan?"},
+        {"role": "assistant", "content": "Lansing."}
+      ],
+      "metadata": {"uuid": "demo-search", "ground_truth": "Lansing", "num_tool_calls": 0}
+    }
+  ]
+}

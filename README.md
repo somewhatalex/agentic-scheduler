@@ -29,11 +29,14 @@ directory) are wiped, so keep everything that matters under `/mydata`:
       needs approval; if that means a new dataset, update the URN in `profile.py`
       and rerun `setup.sh` (the download takes ~2 minutes).
 - [ ] Format the raw JSONL into Parquet in `/mydata/processed`.
+- [x] Local ingestion prototype, program/call dependencies, and recorded replay
+      export tested on a small Nemotron sample. Full CloudLab ingestion remains
+      to be run.
 - [ ] SWE-smith.
 
 ### Data format
 
-Each file is JSONL: one line is one complete agent trajectory in OpenAI chat
+Each file is JSONL: one line is one recorded agent conversation in OpenAI chat
 format with tool calls.
 
 | File | Size | Contents | Typical length (median) |
@@ -47,8 +50,10 @@ per file (for example, only `interactive_agent` has `model` and `domain`).
 Each message has a `role` (`system`, `user`, `assistant`, `tool`) and
 `content`; assistant messages may also have `reasoning_content` and
 `tool_calls`, and tool messages have a `tool_call_id` linking them to the call.
-A trajectory ends with an assistant message that has no tool call. There are
-no timings or token counts in the data.
+Complete response episodes end with an assistant response and no pending tool
+calls; some records instead stop at an unresolved tool call. There are no timing
+fields. When present, `metadata.turn_token_count` supplies per-message reasoning
+and content token counts, aligned to all message roles.
 
 To look at a record on a node:
 
@@ -118,3 +123,119 @@ rsync -avz --progress <cloudlab-user>@<node>.utah.cloudlab.us:/mydata/processed/
 ```
 
 `data/` is gitignored. Do not commit data files.
+
+## Ingestion prototype
+
+The ingester runs on a laptop or a CloudLab CPU node. It reads raw JSONL directly;
+it does not call models, execute tools, or need a Hugging Face token. Python 3.10+
+and the PyArrow dependency in `requirements.txt` are sufficient.
+
+### Test locally, without downloading Nemotron
+
+Use `venv` as the local virtual environment:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python scripts/make_demo_data.py data/raw/demo
+python scripts/prepare_data.py data/raw/demo data/processed/demo-v2 --strict
+python scripts/inspect_processed.py data/processed/demo-v2
+```
+
+The synthetic fixture covers parallel tool calls, out-of-order tool results,
+multiple user requests, missing token metadata, and an unresolved tool call.
+Expected output: **4 trajectories, 15 events, 6 LLM calls, 5 examples,
+1 excluded episode**. Three parent programs are complete; one is incomplete.
+The inspection command checks Parquet row counts against the audit and displays
+examples. The tests separately check label correctness, prefix-only features,
+split grouping, malformed input, and incomplete episodes.
+
+Both demo generation and ingestion require a **new output directory**. For a
+repeat run, choose another name, such as `demo-v3`; existing results are refused.
+
+### Test a real subset on CloudLab
+
+On a Utah experiment with `/mydata` mounted read-write, after the data setup above:
+
+```bash
+source /mydata/venv/bin/activate
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python scripts/prepare_data.py /mydata/raw/nemotron /mydata/processed/smoke-v2 --limit 1000
+python scripts/inspect_processed.py /mydata/processed/smoke-v2
+```
+
+If you switch between ARM and x86 nodes, create a fresh node-local `venv` and
+install `requirements.txt` for that architecture. Compiled packages in a
+persistent virtualenv are architecture-specific; the raw and Parquet data are
+portable.
+
+`--limit` caps input records **per file**, including rejected and duplicate rows.
+It does not limit downloads or randomly sample the corpus. Check `audit.json` for
+rejection reasons, usable examples in each subset, excluded episodes, and token
+metadata coverage before processing everything:
+
+```bash
+python scripts/prepare_data.py /mydata/raw/nemotron /mydata/processed/nemotron-v2
+python scripts/inspect_processed.py /mydata/processed/nemotron-v2
+```
+
+A read-only experiment can run the smoke test with `/tmp/smoke-v2` as its output;
+copy that output off the node before the experiment ends. Input data is never
+modified. Teammates can also copy a small sample to a laptop: on CloudLab run
+`head -n 100 /mydata/raw/nemotron/data/tool_calling.jsonl > /tmp/tool_calling.jsonl`,
+then use `scp` from the laptop to copy that file into `data/raw/sample/` and pass
+that directory to `prepare_data.py`. Malformed sample rows will be audited.
+
+### Output and interpretation
+
+| File | Contents |
+| --- | --- |
+| `trajectories.parquet` | Parent identity, source/domain, tool schemas, split, and quality counts |
+| `events.parquet` | One row per message, text/reasoning, calls, matched results, and recorded token counts |
+| `examples.parquet` | Features and remaining-work targets at LLM-ready boundaries |
+| `calls.parquet` | Program/thread/call IDs, parent calls, interrupt references, and nullable timing fields |
+| `audit.json` | Configuration, versions, input fingerprints, counts, and rejection/exclusion reasons |
+| `_SUCCESS` | Created only after all outputs close successfully and at least one example exists |
+
+Detailed semantics, feature columns, and limitations are in
+[docs/ingestion.md](docs/ingestion.md). A failed or interrupted run must not be
+used for training. Runs producing no examples exit with code 2 and no `_SUCCESS`.
+
+### Agentix compatibility and recorded replay
+
+The target is Luo et al.'s [NSDI '26 Agentix serving system](https://www.usenix.org/conference/nsdi26/presentation/luo).
+The output now preserves its **program-level execution model**: a whole parent
+conversation is one program, assistant messages are LLM calls, and user/tool
+messages are external interrupts. Program history continues across user turns.
+Both per-response and whole-program remaining-work targets are available.
+
+This is **execution-model compatibility**, with an adapter-friendly export;
+direct loading into an Agentix runtime has not been verified. The reviewed paper
+describes session APIs but does not specify a native Parquet/JSONL loader. Our
+program/thread/session fields are interchange metadata, not claimed upstream API
+arguments. Measured LLM service times and external delays are still missing, and
+these serial conversations do not supply parallel LLM branches for ATLAS.
+
+After a schema-version-2 ingestion run, export a small recorded workload:
+
+```bash
+python scripts/export_replay.py data/processed/demo-v2 data/replay/demo-v2 --model replay-placeholder
+```
+
+The demo exports **3 complete programs and 5 calls**. No model or tool is invoked.
+`replay.jsonl` contains OpenAI-shaped request payloads, separately stored expected
+responses, call dependencies, and session-boundary flags. `manifest.json` records
+export scope; `_SUCCESS` marks a completed export with calls. The default cap is
+100 complete programs; use `--limit-programs N` and optionally `--split test`.
+Full request prefixes are repeated in this optional export, so keep its size
+small. Existing schema-version-1 output must be regenerated for replay export;
+the inspection script continues to support version 1.
+
+For a PLAS comparison matching Agentix's program unit, train using the
+`y_program_remaining_*` targets and accumulate **LLM service time** across that
+same program. Recorded token counts are a proxy, not attained service time.
+See [docs/agentix.md](docs/agentix.md) for the compatibility assessment, field
+mapping, and the runtime work still required.

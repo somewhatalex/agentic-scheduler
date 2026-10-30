@@ -35,7 +35,8 @@ if [ ! -x "$VENV/bin/python" ]; then
     python3 -m venv "$VENV"
 fi
 "$VENV/bin/pip" install -q --upgrade pip
-"$VENV/bin/pip" install -q huggingface_hub datasets pyarrow pandas tiktoken
+"$VENV/bin/pip" install -q huggingface_hub datasets pandas tiktoken
+"$VENV/bin/pip" install -q -r "$(dirname "$0")/../requirements.txt"
 
 # hf download resumes partial downloads, so the marker only records a full success.
 if [ -f "$RAW_DIR/.download_complete" ]; then
