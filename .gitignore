@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project data: never commit datasets, downloads, or credentials
+data/
+mydata/
+/mydata
+hf/
+*.parquet
+*.jsonl
+*.arrow
+.huggingface/
