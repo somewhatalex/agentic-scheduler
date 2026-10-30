@@ -4,10 +4,10 @@ Step-Level Remaining-Work Prediction for Scheduling LLM Agents (CSE 585).
 
 ## Data setup on CloudLab
 
-Raw and processed data live on a long-term persistent dataset (ext4, project
-Michigan-BigData, **Utah** cluster) that is mounted at `/mydata`. Experiments
-expire after a few hours and their local disks are wiped, so keep everything that
-matters under `/mydata`:
+Raw and processed data live on a persistent dataset (`agentic-sched-data`: ext4,
+100 GB, project Michigan-BigData, **Utah** cluster) that is mounted at `/mydata`.
+Experiments expire after a few hours and their local disks (including your home
+directory) are wiped, so keep everything that matters under `/mydata`:
 
 | Path | Contents |
 | --- | --- |
@@ -15,6 +15,46 @@ matters under `/mydata`:
 | `/mydata/hf` | `HF_HOME` (Hugging Face cache) |
 | `/mydata/raw/nemotron` | raw `nvidia/Nemotron-SFT-Agentic-v2` download |
 | `/mydata/processed` | formatted Parquet output |
+
+### Status (Oct 29, 2026)
+
+- [x] Profile `agentic-sched-data` created from this repo in the CloudLab portal.
+- [x] Nemotron-SFT-Agentic-v2 downloaded to `/mydata/raw/nemotron/data/`
+      (21 GB used, ~66 GB free). File sizes match Hugging Face.
+- [x] `check_data.py` parsed 1000 trajectories from each file.
+- [x] Persistence verified: data written in one experiment was read back
+      unchanged (same MD5) from a different node in a second, read-only
+      experiment, without re-downloading.
+- [ ] The dataset is **short-term and expires Nov 4, 2026**. Long-term storage
+      needs approval; if that means a new dataset, update the URN in `profile.py`
+      and rerun `setup.sh` (the download takes ~2 minutes).
+- [ ] Format the raw JSONL into Parquet in `/mydata/processed`.
+- [ ] SWE-smith.
+
+### Data format
+
+Each file is JSONL: one line is one complete agent trajectory in OpenAI chat
+format with tool calls.
+
+| File | Size | Contents | Typical length (median) |
+| --- | --- | --- | --- |
+| `search.jsonl` | 0.6 GB | multi-hop web research, 1 tool (`web-search`) | 25 messages, 11 tool calls |
+| `interactive_agent.jsonl` | 6.3 GB | customer-service agent following a policy, many tools | 11 messages, 2 tool calls |
+| `tool_calling.jsonl` | 14.9 GB | general tool use (e.g. Wolfram) | 7 messages, 2 tool calls |
+
+All files share `messages`, `tools`, and `metadata`; the other columns differ
+per file (for example, only `interactive_agent` has `model` and `domain`).
+Each message has a `role` (`system`, `user`, `assistant`, `tool`) and
+`content`; assistant messages may also have `reasoning_content` and
+`tool_calls`, and tool messages have a `tool_call_id` linking them to the call.
+A trajectory ends with an assistant message that has no tool call. There are
+no timings or token counts in the data.
+
+To look at a record on a node:
+
+```bash
+head -1 /mydata/raw/nemotron/data/search.jsonl | /mydata/venv/bin/python -m json.tool | less
+```
 
 ### 1. Create the profile (once)
 
@@ -40,6 +80,16 @@ the List View tab shows its SSH command, for example:
 ```bash
 ssh <cloudlab-user>@<node>.utah.cloudlab.us
 ```
+
+Tips:
+
+- SSH logs you into your home directory; the data is in `/mydata`.
+- `/mydata` can take about a minute to mount after SSH starts working. If it is
+  missing, wait and check again with `findmnt /mydata`.
+- The default hardware is often an m400 (ARM). For heavier processing, set the
+  hardware type to an x86 node such as m510 or c6525.
+- The image has no `tmux`. Install it (`sudo apt-get install -y tmux`) before
+  long-running jobs so they survive a dropped SSH connection.
 
 ### 3. Download and check the data
 
