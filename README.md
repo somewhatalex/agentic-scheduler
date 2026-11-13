@@ -46,6 +46,9 @@ so results are **simulation estimates**.
 - **SSJF (perfect length):** the waiting call with the shortest output runs
   first, per call and without preemption, after Qiu et al. (AIOps '24).
 - **SSJF (noisy):** the same, with random error added to each length.
+- **Perfect information:** the program with the least total LLM work left, over
+  all its future calls, runs first, and can interrupt a running call. A
+  reference for what a flawless remaining-work predictor could do.
 
 Both SSJF versions rank calls by the **recorded output length, not a trained
 predictor**, so the perfect-length version is an upper bound on real SSJF.
@@ -57,17 +60,19 @@ python scripts/simulate.py data/processed/slice-v2 --output data/results/slice-v
 Mean response time in seconds on the first slice (5 trials of 500 programs, 8
 server slots):
 
-| Load | FCFS | Agentix-style | SSJF (perfect length) | SSJF (noisy) |
-| --- | --- | --- | --- | --- |
-| batch | 2429.7 | 2235.9 | 1729.3 | 1912.8 |
-| 0.5 | 80.8 | 80.9 | 80.6 | 80.7 |
-| 0.8 | 89.4 | 89.2 | 86.8 | 87.5 |
-| 0.95 | 157.9 | 157.2 | 127.3 | 143.7 |
+| Load | FCFS | Agentix-style | SSJF (perfect length) | SSJF (noisy) | Perfect information |
+| --- | --- | --- | --- | --- | --- |
+| batch | 2429.7 | 2235.9 | 1729.3 | 1912.8 | 1172.1 |
+| 0.5 | 80.8 | 80.9 | 80.6 | 80.7 | 80.3 |
+| 0.8 | 89.4 | 89.2 | 86.8 | 87.5 | 83.2 |
+| 0.95 | 157.9 | 157.2 | 127.3 | 143.7 | 105.1 |
 
 When all programs arrive at once, the Agentix-style policy is about 8% better
 than FCFS, noisy SSJF about 21%, and perfect-length SSJF about 29%. Under
 streaming arrivals the Agentix-style policy makes no measurable difference,
-and SSJF helps only at loads 0.8 and 0.95.
+and SSJF helps only at loads 0.8 and 0.95. Perfect information beats
+perfect-length SSJF at every load (52% better than FCFS in batch): knowing a
+whole program's remaining work helps more than knowing one call's length.
 
 ## Next: GPU session (Nov 13)
 
