@@ -16,7 +16,7 @@ directory) are wiped, so keep everything that matters under `/mydata`:
 | `/mydata/raw/nemotron` | raw `nvidia/Nemotron-SFT-Agentic-v2` download |
 | `/mydata/processed` | formatted Parquet output |
 
-### Status (Oct 29, 2026)
+### Status (Nov 12, 2026)
 
 - [x] Profile `agentic-sched-data` created from this repo in the CloudLab portal.
 - [x] Nemotron-SFT-Agentic-v2 downloaded to `/mydata/raw/nemotron/data/`
@@ -25,13 +25,20 @@ directory) are wiped, so keep everything that matters under `/mydata`:
 - [x] Persistence verified: data written in one experiment was read back
       unchanged (same MD5) from a different node in a second, read-only
       experiment, without re-downloading.
-- [ ] The dataset is **short-term and expires Nov 4, 2026**. Long-term storage
-      needs approval; if that means a new dataset, update the URN in `profile.py`
-      and rerun `setup.sh` (the download takes ~2 minutes).
+- [ ] The dataset was **short-term with a Nov 4, 2026 expiry**. Whether it still
+      exists has not been checked. Long-term storage needs approval; if that
+      means a new dataset, update the URN in `profile.py` and rerun `setup.sh`
+      (the download takes ~2 minutes).
 - [ ] Format the raw JSONL into Parquet in `/mydata/processed`.
 - [x] Local ingestion prototype, program/call dependencies, and recorded replay
       export tested on a small Nemotron sample. Full CloudLab ingestion remains
       to be run.
+- [x] Scheduling simulator with FCFS and an Agentix-style (PLAS) baseline, run
+      on a local slice of 4,209 complete programs with assumed token speeds.
+      Results and assumptions are in [docs/baseline.md](docs/baseline.md).
+- [ ] Measure prefill and decode speed on a CloudLab GPU with
+      `scripts/profile_llm.py` and rerun the baseline with measured rates.
+- [ ] Rerun the baseline on the full corpus once full ingestion is done.
 - [ ] SWE-smith.
 
 ### Data format
@@ -239,3 +246,30 @@ For a PLAS comparison matching Agentix's program unit, train using the
 same program. Recorded token counts are a proxy, not attained service time.
 See [docs/agentix.md](docs/agentix.md) for the compatibility assessment, field
 mapping, and the runtime work still required.
+
+## Baseline simulation
+
+`scripts/simulate.py` compares scheduling policies on recorded programs from an
+ingestion run. It runs on a CPU and serves no model: times come from token
+counts and assumed rates, so results are **simulation estimates**. The policies
+are call-level FCFS, an Agentix-style program-level attained-service policy
+(PLAS), and a perfect-information reference.
+
+```bash
+python scripts/simulate.py data/processed/slice-v2 --output data/results/slice-v2-baseline.json
+```
+
+On the first local slice, the Agentix-style policy cut mean response time by
+about 8% against FCFS when all programs arrive at once, and made no measurable
+difference to the mean under streaming arrivals. The full table, the policy
+definitions, the assumptions, and the commands to rebuild the slice are in
+[docs/baseline.md](docs/baseline.md).
+
+To replace the assumed token speeds with measured ones, start an
+OpenAI-compatible server such as vLLM on a GPU node and run:
+
+```bash
+python scripts/profile_llm.py --model <model> --concurrency 8
+```
+
+It prints the `--prefill-tps` and `--decode-tps` values to pass to `simulate.py`.
