@@ -2,17 +2,6 @@
 
 Step-Level Remaining-Work Prediction for Scheduling LLM Agents (CSE 585).
 
-## Status (Nov 12, 2026)
-
-- [x] Ingestion of Nemotron-SFT-Agentic-v2 into Parquet, tested on a local slice.
-- [x] FCFS and Agentix-style baseline in a scheduling simulator, on that slice
-      with assumed token speeds.
-- [ ] Recreate the CloudLab dataset: `agentic-sched-data` had a Nov 4 expiry and
-      no longer appears in the owner's dataset list.
-- [ ] Full-corpus ingestion, then rerun the baseline on it.
-- [ ] Measure token speeds on a GPU and rerun the baseline with them.
-- [ ] Domain and subset holdouts, SWE-smith, predictors, and the proposed scheduler.
-
 ## Quick start
 
 No GPU, model, or Hugging Face token is needed. Python 3.10+.
@@ -54,27 +43,46 @@ so results are **simulation estimates**.
 - **Agentix-style:** each call is ranked by the LLM service its whole program
   has already received, so long-running programs give way to short ones. This is
   our reading of the rule in Luo et al. (NSDI '26), not the Agentix runtime.
+- **SSJF (perfect length):** the waiting call with the shortest output runs
+  first, per call and without preemption, after Qiu et al. (AIOps '24).
+- **SSJF (noisy):** the same, with random error added to each length.
+
+Both SSJF versions rank calls by the **recorded output length, not a trained
+predictor**, so the perfect-length version is an upper bound on real SSJF.
 
 ```bash
-python scripts/simulate.py data/processed/slice-v2 --output data/results/slice-v2-baseline.json
+python scripts/simulate.py data/processed/slice-v2 --output data/results/slice-v2-baseline-ssjf.json
 ```
 
 Mean response time in seconds on the first slice (5 trials of 500 programs, 8
 server slots):
 
-| Load | FCFS | Agentix-style |
-| --- | --- | --- |
-| batch | 2429.7 | 2235.9 |
-| 0.5 | 80.8 | 80.9 |
-| 0.8 | 89.4 | 89.2 |
-| 0.95 | 157.9 | 157.2 |
+| Load | FCFS | Agentix-style | SSJF (perfect length) | SSJF (noisy) |
+| --- | --- | --- | --- | --- |
+| batch | 2429.7 | 2235.9 | 1729.3 | 1912.8 |
+| 0.5 | 80.8 | 80.9 | 80.6 | 80.7 |
+| 0.8 | 89.4 | 89.2 | 86.8 | 87.5 |
+| 0.95 | 157.9 | 157.2 | 127.3 | 143.7 |
 
-The Agentix-style policy is about 8% better when all programs arrive at once and
-makes no measurable difference under streaming arrivals.
+When all programs arrive at once, the Agentix-style policy is about 8% better
+than FCFS, noisy SSJF about 21%, and perfect-length SSJF about 29%. Under
+streaming arrivals the Agentix-style policy makes no measurable difference,
+and SSJF helps only at loads 0.8 and 0.95.
+
+## Next: GPU session (Nov 13)
+
+One `c240g5` node (NVIDIA P100, 12 GB) at CloudLab Wisconsin; details and the
+full task list are in [docs/gpu-session.md](docs/gpu-session.md).
+
+- Measure prefill and decode speed with vLLM and `scripts/profile_llm.py`.
+- Rerun the baseline with the measured speeds.
+- Start a BERT-base output-length predictor on Nemotron for a real SSJF baseline.
+- Copy results off the node before it expires.
 
 ## More detail
 
 - [docs/baseline.md](docs/baseline.md): policy definitions, full results, assumptions, and measuring token speeds with `scripts/profile_llm.py`.
+- [docs/gpu-session.md](docs/gpu-session.md): the GPU node, its reservation, and the tasks for the Nov 13 session.
 - [docs/cloudlab.md](docs/cloudlab.md): CloudLab profile, experiments, downloading the data, and running ingestion there.
 - [docs/ingestion.md](docs/ingestion.md): table semantics, features, targets, and splits.
 - [docs/agentix.md](docs/agentix.md): Agentix compatibility and the recorded replay export.

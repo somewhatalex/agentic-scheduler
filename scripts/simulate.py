@@ -26,6 +26,13 @@ Policies:
           preemption when a running call crosses into a lower level. This is
           our reading of the paper's rule, not the Agentix runtime, and it has
           no anti-starvation promotion.
+* ssjf    SSJF-style (Qiu et al., AIOps '24): the waiting call with the shortest
+          predicted output runs first, without preemption and without looking
+          at its program. No trained predictor exists yet, so the prediction is
+          the recorded output length: an upper bound on what SSJF could do.
+* ssjf-noisy  The same with multiplicative lognormal error on each predicted
+          length (--ssjf-noise-sigma), standing in for an imperfect predictor.
+          The error level is our assumption, not the paper's measured accuracy.
 * oracle  Shortest remaining program service with perfect information. A
           reference for the same slot model, not a global optimum.
 """
@@ -40,7 +47,8 @@ import statistics
 import sys
 from pathlib import Path
 
-POLICIES = ("fcfs", "plas", "oracle")
+POLICIES = ("fcfs", "plas", "ssjf", "ssjf-noisy", "oracle")
+PREDICTION_FIELD = {"ssjf": 2, "ssjf-noisy": 3}
 EPS = 1e-9
 # Two-sided 95% Student t critical values by degrees of freedom.
 T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
@@ -55,8 +63,10 @@ def simulate(programs, policy, slots, thresholds=()):
     """Run one policy and return each program's finish time.
 
     `programs` is a list of dicts with `arrival` (seconds) and `calls`, a list
-    of (wait_before_s, service_s) pairs in execution order. The wait happens
-    before the call becomes ready and does not hold a slot.
+    of (wait_before_s, service_s) tuples in execution order. The wait happens
+    before the call becomes ready and does not hold a slot. The SSJF policies
+    also need each call's predicted output length: tuple item 2 for `ssjf` and
+    item 3 for `ssjf-noisy`.
     """
     if policy not in POLICIES:
         raise ValueError(f"unknown policy: {policy}")
@@ -64,7 +74,7 @@ def simulate(programs, policy, slots, thresholds=()):
     index = [0] * count          # current call
     remaining = [0.0] * count    # service left in the current call
     attained = [0.0] * count     # LLM service the program has received
-    future = [sum(s for _, s in p["calls"]) for p in programs]  # service not yet started
+    future = [sum(c[1] for c in p["calls"]) for p in programs]  # service not yet started
     ready_at = [0.0] * count
     finish = [None] * count
     pending = []                 # (time the next call becomes ready, program)
@@ -73,6 +83,7 @@ def simulate(programs, policy, slots, thresholds=()):
             raise ValueError("a program needs at least one call")
         heapq.heappush(pending, (program["arrival"] + program["calls"][0][0], pid))
     active, running, now = set(), [], 0.0
+    holding = set()              # programs holding a slot, for non-preemptive policies
 
     def level(pid):
         return bisect.bisect_right(thresholds, attained[pid] + EPS)
@@ -82,6 +93,9 @@ def simulate(programs, policy, slots, thresholds=()):
             return (ready_at[pid], pid)
         if policy == "plas":
             return (level(pid), ready_at[pid], pid)
+        if policy in PREDICTION_FIELD:
+            predicted = programs[pid]["calls"][index[pid]][PREDICTION_FIELD[policy]]
+            return (pid not in holding, predicted, ready_at[pid], pid)
         return (remaining[pid] + future[pid], ready_at[pid], pid)
 
     while pending or active:
@@ -113,6 +127,7 @@ def simulate(programs, policy, slots, thresholds=()):
             ready_at[pid] = now
             active.add(pid)
         running = heapq.nsmallest(slots, active, key=key)
+        holding = set(running)
     return finish
 
 
@@ -165,9 +180,13 @@ def load_programs(processed, *, split=None, subsets=None):
 
 
 def apply_timing(program, *, prefill_tps, decode_tps, tool_median_s, tool_sigma,
-                 user_think_s, seed):
-    """Turn token facts into (wait_before_s, service_s); same draws for every policy."""
+                 user_think_s, ssjf_noise_sigma, seed):
+    """Turn token facts into (wait_s, service_s, output_tokens, noisy_output_tokens).
+
+    Draws depend only on the seed and program, so every policy sees the same ones.
+    """
     rng = random.Random(f"{seed}:{program['program_id']}")
+    noise = random.Random(f"{seed}:ssjf:{program['program_id']}")
     timed = []
     for call in program["calls"]:
         wait = max((rng.lognormvariate(math.log(tool_median_s), tool_sigma)
@@ -175,7 +194,8 @@ def apply_timing(program, *, prefill_tps, decode_tps, tool_median_s, tool_sigma,
         if call["user_followup"]:
             wait += user_think_s
         service = call["context_tokens"] / prefill_tps + call["output_tokens"] / decode_tps
-        timed.append((wait, service))
+        timed.append((wait, service, call["output_tokens"],
+                      call["output_tokens"] * noise.lognormvariate(0.0, ssjf_noise_sigma)))
     return timed
 
 
@@ -201,13 +221,13 @@ def run_experiment(pool, args):
         for trial in range(args.trials):
             rng = random.Random(f"{args.seed}:{load}:{trial}")
             chosen = rng.sample(pool, min(args.programs, len(pool)))
-            mean_service = statistics.fmean(sum(s for _, s in p["calls"]) for p in chosen)
+            mean_service = statistics.fmean(sum(c[1] for c in p["calls"]) for p in chosen)
             clock, programs = 0.0, []
             for program in chosen:
                 if load != "batch":
                     clock += rng.expovariate(float(load) * args.slots / mean_service)
                 programs.append({"arrival": clock, "calls": program["calls"]})
-            alone = [sum(w + s for w, s in p["calls"]) for p in programs]
+            alone = [sum(c[0] + c[1] for c in p["calls"]) for p in programs]
             for policy in args.policies:
                 finish = simulate(programs, policy, args.slots, thresholds)
                 response = [f - p["arrival"] for f, p in zip(finish, programs)]
@@ -245,6 +265,8 @@ def main():
     parser.add_argument("--tool-median-s", type=float, default=1.0)
     parser.add_argument("--tool-sigma", type=float, default=1.0)
     parser.add_argument("--user-think-s", type=float, default=0.0)
+    parser.add_argument("--ssjf-noise-sigma", type=float, default=1.0,
+                        help="sigma of the lognormal error on ssjf-noisy predictions")
     parser.add_argument("--plas-base-s", type=float, default=2.0,
                         help="attained service at which a program leaves the top queue")
     parser.add_argument("--plas-ratio", type=float, default=2.0)
@@ -261,13 +283,14 @@ def main():
         program["calls"] = apply_timing(
             program, prefill_tps=args.prefill_tps, decode_tps=args.decode_tps,
             tool_median_s=args.tool_median_s, tool_sigma=args.tool_sigma,
-            user_think_s=args.user_think_s, seed=args.seed)
+            user_think_s=args.user_think_s, ssjf_noise_sigma=args.ssjf_noise_sigma,
+            seed=args.seed)
     results = run_experiment(pool, args)
 
     print(f"{len(pool)} complete programs available ({skipped} skipped for missing token counts); "
           f"{min(args.programs, len(pool))} per trial, {args.trials} trials, {args.slots} slots")
     print("Simulation estimates under assumed timing; see --help.\n")
-    print(f"{'load':>6} {'policy':>7} {'mean resp s':>12} {'p95 resp s':>11} "
+    print(f"{'load':>6} {'policy':>10} {'mean resp s':>12} {'p95 resp s':>11} "
           f"{'p95 slowdown':>13} {'vs fcfs s (95% CI)':>22}")
     for row in results:
         versus = ""
@@ -275,7 +298,7 @@ def main():
             versus = f"{row['mean_response_vs_fcfs_s']:+.1f}"
             if row["vs_fcfs_ci95_s"] is not None:
                 versus += f" ± {row['vs_fcfs_ci95_s']:.1f}"
-        print(f"{row['load']:>6} {row['policy']:>7} {row['mean_response_s']:>12.1f} "
+        print(f"{row['load']:>6} {row['policy']:>10} {row['mean_response_s']:>12.1f} "
               f"{row['p95_response_s']:>11.1f} {row['p95_slowdown']:>13.1f} {versus:>22}")
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)

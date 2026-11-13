@@ -52,6 +52,21 @@ class Simulate(unittest.TestCase):
         programs = [program(0.0, (0.0, 5.0)), program(0.0, (0.0, 1.0), (0.0, 1.0))]
         self.assertEqual(simulate(programs, "oracle", 1), [7.0, 2.0])
 
+    def test_ssjf_runs_the_shortest_predicted_call_without_preemption(self):
+        # Items 2 and 3 are the predicted output lengths for ssjf and ssjf-noisy.
+        programs = [program(0.0, (0.0, 5.0, 500, 10)), program(0.0, (0.0, 1.0, 100, 900)),
+                    program(0.5, (0.0, 0.2, 20, 20))]
+        # The 1 s call starts first and is not preempted by the later, shorter one.
+        self.assertEqual(simulate(programs, "ssjf", 1), [6.2, 1.0, 1.2])
+        # With wrong predictions the long call goes first.
+        self.assertEqual(simulate(programs, "ssjf-noisy", 1), [5.0, 6.2, 5.2])
+
+    def test_ssjf_ignores_program_history(self):
+        # A has used far more service, but its next call is shorter, so it goes first.
+        programs = [program(0.0, (0.0, 9.0, 900, 900), (0.0, 1.0, 10, 10)),
+                    program(8.0, (0.0, 2.0, 50, 50))]
+        self.assertEqual(simulate(programs, "ssjf", 1), [10.0, 12.0])
+
     def test_slots_run_calls_concurrently(self):
         programs = [program(0.0, (0.0, 4.0)), program(0.0, (0.0, 4.0))]
         self.assertEqual(simulate(programs, "fcfs", 2), [4.0, 4.0])
